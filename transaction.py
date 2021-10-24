@@ -1,5 +1,7 @@
 from enum import Enum
 
+from util.status import Status
+
 
 class ETransactionType(Enum):
     A2A = 1 # account to account / перевод средств
@@ -22,10 +24,26 @@ class TTransactionManager(object):
 
         self.all_transactions = []
 
-    def new_transaction(self, id_from, id_to, amount, type):
-        self.all_transactions.append(TTransaction(
+    def new_transaction(self, account_from, account_to, amount, type) -> Status:
+        id_from = account_from.id if account_from is not None else None
+        id_to = account_to.id if account_to is not None else None
+
+        transaction = TTransaction(
             id_from, id_to,
             amount,
             type,
             self.time_manager.get_datetime()
-        ))
+        )
+
+        if type == ETransactionType.A2A:
+            verifiers = [
+                account_from.bank,
+                account_to.bank,
+            ]
+
+            for verifier in verifiers:
+                if not verifier.verify(transaction):
+                    return Status.Error("not verified")
+
+        self.all_transactions.append(transaction)
+        return Status.Ok()

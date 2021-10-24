@@ -11,7 +11,9 @@ class TestSimpleScenarios:
             step=timedelta(days=1),
         )
 
-        self.bank_manager = TBankManager()
+        self.transaction_manager = TTransactionManager(self.time_manager)
+
+        self.bank_manager = TBankManager(self.transaction_manager)
         self.client_manager = TClientManager()
 
 
@@ -41,5 +43,5 @@ class TestSimpleScenarios:
         bank = bank.Get()
 
         # create debit account
-        bank.new_account(client_id, EAccountType.DEBIT)
-        assert(len(IAccount.all) == 1)
+        bank.new_account(self.client_manager.get_client(client_id).info, EAccountType.DEBIT)
+        assert(len(TAccount.all) == 1)
