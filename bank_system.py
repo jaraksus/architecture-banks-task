@@ -39,7 +39,13 @@ class TAccount(object):
         self.is_suspicious = client_info.is_suspicious
         self.suspicious_limit = 0
 
-        TAccount.all[id] = self
+        self.funds = 0
+
+        TAccount.all[self.id] = self
+    
+    def __del__(self):
+        del TAccount.all[self.id]
+        TAccount.IdsGen.free(self.id)
 
     def set_suspicious_limit(self, suspicious_limit):
         self.suspicious_limit = suspicious_limit
@@ -63,7 +69,7 @@ class TAccount(object):
 
         if status.IsOk():
             self.funds -= amount
-            TAccount.all[receiver_id] += amount
+            TAccount.all[receiver_id].funds += amount
 
         return status
 
@@ -87,9 +93,6 @@ class TAccount(object):
         if self.is_suspicious and amount > self.suspicious_limit:
             return Status.Error(f"amount is higher then suspicious limit: {amount} > {self.suspicious_limit}")
 
-        if self.funds < amount:
-            return Status.Error("Insufficient funds")
-
         status = self.transaction_manager.new_transaction(
             self,
             None,
@@ -102,8 +105,8 @@ class TAccount(object):
 
         return status
 
-    def update_interest(self, datetime: datetime):
-        raise NotImplementedError("update_interest must be implemented")
+    def update(self, datetime: datetime):
+        raise NotImplementedError("update must be implemented")
 
 
 class TDebitAccount(TAccount):
@@ -113,9 +116,14 @@ class TDebitAccount(TAccount):
         self.interest_rate = interest_rate
 
         self.unpaid_interest = 0
-        self.funds = 0
 
-    def update_interest(self, datetime: datetime):
+    def withdraw(self, amount) -> Status:
+        if self.funds < amount:
+            return Status.Error("Insufficient funds")
+
+        return super().withdraw(amount)
+
+    def update(self, datetime: datetime):
         self.unpaid_interest += self.funds * self.interest_rate
 
         if datetime.day == TAccount.FIRST_DAY_OF_THE_MONTH:
@@ -136,9 +144,12 @@ class TDepositAccount(TAccount):
     def withdraw(self, amount) -> Status:
         if not self.withdraw_available:
             return Status.Error("withdraw not available")
+        if self.funds < amount:
+            return Status.Error("Insufficient funds")
+
         return TAccount.withdraw(self, amount)
     
-    def update_interest(self, datetime: datetime):
+    def update(self, datetime: datetime):
         self.unpaid_interest += self.funds * self.interest_rate
 
         if datetime <= self.end_datetime and datetime.day == TAccount.FIRST_DAY_OF_THE_MONTH:
@@ -147,6 +158,17 @@ class TDepositAccount(TAccount):
 
         if datetime >= self.end_datetime:
             self.withdraw_available = True
+
+
+class TCreditAccount(TAccount):
+    def __init__(self, bank, client_info, transaction_manager, dayly_fee):
+        TAccount.__init__(self, bank, client_info, EAccountType.CREDIT, transaction_manager)
+
+        self.dayly_fee = dayly_fee
+
+    def update(self, datetime: datetime):
+        if self.funds < 0:
+            self.funds -= self.dayly_fee
 
 
 class TBank(object):
@@ -159,15 +181,24 @@ class TBank(object):
 
         self.accounts = {}
         self.interest_rate = 0
+        self.credit_dayly_fee = 0
         self.limit_for_suspicious_accounts = 0
+
+        self.black_list = set()
 
     def set_interest_rate(self, interest_rate):
         self.interest_rate = interest_rate
     
+    def set_credit_dayly_fee(self, dayle_fee):
+        self.credit_dayly_fee = dayle_fee
+
     def set_limit_for_suspicious_accounts(self, limit):
         self.limit_for_suspicious_accounts = limit
 
-    def new_account(self, client_info: TClient.TInfo, type: EAccountType):
+    def add_to_black_list(self, client_id):
+        self.black_list.add(client_id)
+
+    def new_account(self, client_info: TClient.TInfo, type: EAccountType, kwargs={}):
         if not client_info.client_id in self.accounts.keys():
             self.accounts[client_info.client_id] = []
 
@@ -179,11 +210,27 @@ class TBank(object):
                 interest_rate=self.interest_rate,
                 transaction_manager=self.transaction_manager,
             )
-        else:
-            raise RuntimeError("unknown account type")
+        elif type == EAccountType.DEPOSIT:
+            account = TDepositAccount(
+                self,
+                client_info,
+                kwargs['initial_funds'],
+                self.interest_rate,
+                self.time_manager.get_datetime() + TBank.ONE_YEAR,
+                self.transaction_manager
+            )
+        elif type == EAccountType.CREDIT:
+            account = TCreditAccount(
+                self,
+                client_info,
+                self.transaction_manager,
+                self.credit_dayly_fee
+            )
 
         account.set_suspicious_limit(self.limit_for_suspicious_accounts)
         self.accounts[client_info.client_id].append(account)
+
+        return account.id
     
     def update_client_info(self, client_info: TClient.TInfo):
         if not client_info.client_id in self.accounts.keys():
@@ -192,14 +239,16 @@ class TBank(object):
         for account in self.accounts[client_info.client_id]:
             account.update_client_info(client_info)
     
-    def update_interests(self):
+    def update_accounts(self):
         for client_id in self.accounts.keys():
             for account in self.accounts[client_id]:
-                account.update_interest(self.time_manager.get_datetime())
+                account.update(self.time_manager.get_datetime())
 
     def verify(self, transaction):
-        return True
-
+        return (
+            not transaction.id_from in self.black_list and
+            not transaction.id_to in self.black_list
+        )
 
 class TBankManager(object):
     def __init__(self, transaction_manager: TTransactionManager):
@@ -212,9 +261,12 @@ class TBankManager(object):
 
         self.banks[name] = TBank(name, time_manager, self.transaction_manager)
         return Status.Ok()
-    
+
     def get_bank(self, name) -> ValueHolder:
         if not name in self.banks.keys():
             return ValueHolder.Error(f"No bank with name {name}")
 
         return ValueHolder.Ok(self.banks[name])
+
+    def get_all_banks(self):
+        return self.banks

@@ -10,11 +10,14 @@ class TClient(object):
     class TOptionalFields(Enum):
         ADDRESS = 1
         PASSPORT = 2
+
+        def __str__(self):
+            return self.name.lower()
     
     class TInfo:
         def __init__(self, client):
             self.client_id = client.id
-            self.is_suspicious = client.has_all_fields()
+            self.is_suspicious = not client.has_all_fields()
 
     def __init__(self, name: str, surname: str):
         self.id = TClient.IdsGen.gen(TClient.IdSize)
@@ -34,7 +37,7 @@ class TClient(object):
 
     def has_all_fields(self) -> bool:
         for field in TClient.TOptionalFields:
-            if not field in self.optional_fields:
+            if not str(field) in self.optional_fields:
                 return False
         return True
 
@@ -56,15 +59,9 @@ class TClientManager(object):
     def is_client_suspicious(self, client_id):
         if not client_id in self.clients.keys():
             return None
-        return self.clients[client_id].has_all_fields()
+        return not self.clients[client_id].has_all_fields()
 
-    def get_clients_ids(self):
-        return list(self.clients.keys())
-
-    def get_all_clients(self):
-        return self.clients
-    
-    def get_client(self, client_id):
+    def get_client(self, client_id) -> TClient:
         if not client_id in self.clients.keys():
             return None
         return self.clients[client_id]
